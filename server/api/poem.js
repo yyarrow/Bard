@@ -79,7 +79,7 @@ export default async function handler(req, res) {
   const payload = JSON.stringify({
     model: "google/gemini-3.5-flash",
     max_tokens: 4000,
-    temperature: 1.1,
+    temperature: 1.0,
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
@@ -134,7 +134,7 @@ export default async function handler(req, res) {
   return res.status(502).json({ error: lastError });
 }
 
-/** 从 chat/completions 响应里尽力挖出诗的 JSON；不合规返回 null。 */
+/** 从 chat/completions 响应里尽力挖出诗的 JSON；不合规返回 null（触发重试）。 */
 function extractPoem(text) {
   let content;
   try {
@@ -149,24 +149,64 @@ function extractPoem(text) {
   }
   if (typeof content !== "string" || !content.trim()) return null;
 
-  let s = content.trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/```\s*$/, "");
+  // 模型偶发在 JSON 前后拖围栏或烂尾（如 `...}\n"}\n境象。"}`），
+  // 用括号配平截出第一个完整对象，而不是贪婪吃到最后一个 }
+  const s = content.replace(/^\s*```(?:json)?\s*/i, "");
+  const obj = firstJsonObject(s);
+  if (!obj) return null;
   let poem;
   try {
-    poem = JSON.parse(s);
+    poem = JSON.parse(obj);
   } catch {
-    const m = s.match(/\{[\s\S]*\}/); // 兜底：截出最外层大括号
-    if (!m) return null;
-    try {
-      poem = JSON.parse(m[0]);
-    } catch {
-      return null;
-    }
-  }
-  if (!poem || typeof poem.title !== "string" || !Array.isArray(poem.lines) ||
-      poem.lines.length === 0) {
     return null;
   }
-  return poem;
+  return sanitizePoem(poem);
+}
+
+function firstJsonObject(s) {
+  const start = s.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+    } else if (c === '"') inStr = true;
+    else if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return s.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+const PUNCT = /[\s，。、！？；：·—…,.!?;:'"“”‘’()（）《》〈〉【】\[\]]/g;
+const CJK_ONLY = /^[〇一-鿿㐀-䶿]+$/;
+
+/** 清洗并校验：诗句必须是纯汉字（模型抽风会混入英文/胡话），不合规判废。 */
+function sanitizePoem(poem) {
+  if (!poem || typeof poem.title !== "string" || !Array.isArray(poem.lines)) {
+    return null;
+  }
+  const lines = poem.lines
+    .filter((l) => typeof l === "string")
+    .map((l) => l.replace(PUNCT, ""))
+    .filter((l) => l.length > 0);
+  if (lines.length < 1 || lines.length > 10) return null;
+  if (!lines.every((l) => l.length >= 2 && l.length <= 16 && CJK_ONLY.test(l))) {
+    return null;
+  }
+  return {
+    title: poem.title.slice(0, 40),
+    dynasty: typeof poem.dynasty === "string" ? poem.dynasty.slice(0, 8) : "",
+    author: typeof poem.author === "string" ? poem.author.slice(0, 16) : "",
+    lines,
+    excerpt: poem.excerpt === true,
+    reason: typeof poem.reason === "string" ? poem.reason.slice(0, 80) : "",
+  };
 }
