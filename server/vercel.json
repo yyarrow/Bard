@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/poem.js": {
+      "maxDuration": 60
+    }
+  }
+}

@@ -1,0 +1,16 @@
+.gradle/
+build/
+local.properties
+.idea/
+.DS_Store
+*.iml
+.kotlin/
+
+# 服务端本地文件（含密钥）
+server/.env
+server/.env.local
+server/node_modules/
+server/.vercel/
+
+# 构建产物
+*.apk
