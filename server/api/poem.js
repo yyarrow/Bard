@@ -20,6 +20,7 @@ const SYSTEM_PROMPT = `
   保持原文顺序，总数控制在 2 到 8 个。
 - reason：一句话（三十字以内）说明为何契合此景，语气清雅，不要用「这张照片」开头。
 - 若有多首同样契合，随意取其一即可，不必总选最负盛名的那首。
+- 只选你能一字不差背出原文的、广为流传的作品；记不准的宁可不选。
 
 只输出 JSON，不要任何其他文字，格式如下：
 {"title":"静夜思","dynasty":"唐","author":"李白","lines":["床前明月光","疑是地上霜","举头望明月","低头思故乡"],"excerpt":false,"reason":"…"}
@@ -29,7 +30,9 @@ const DAILY_PER_DEVICE = 40;
 const MAX_IMAGE_CHARS = 2_000_000; // base64 后约 1.5MB JPEG
 
 // OUTBOUND_PROXY 仅本地调试用（受限地区经宿主代理出去）；生产上不设，走 Vercel 原生 fetch。
+import { createHash } from "node:crypto";
 import { fetch as undiciFetch, ProxyAgent } from "undici";
+import { verifyPoem } from "../lib/corpus.js";
 const dispatcher = process.env.OUTBOUND_PROXY
   ? new ProxyAgent(process.env.OUTBOUND_PROXY)
   : undefined;
@@ -76,26 +79,15 @@ export default async function handler(req, res) {
       ? `这些已经选过，请换别的：${excludeTitles.join("、")}。`
       : "");
 
-  const payload = JSON.stringify({
-    model: "google/gemini-3.5-flash",
-    max_tokens: 4000,
-    temperature: 1.0,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: [
-          { type: "image_url", image_url: { url: image } },
-          { type: "text", text: ask },
-        ],
-      },
-    ],
-  });
-
-  // 模型偶发输出围栏包裹/带尾注的 JSON，或截断——解析做鲁棒，失败自动重试一次
+  // 严格模式：模型选的诗必须能在本地语料库核验，编造/记错就带着黑名单重试
+  const t0 = Date.now();
+  const dev = deviceHash(device);
+  const rejected = [];
   let lastError = "unknown";
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const hint = rejected.length
+      ? `注意：${rejected.map((r) => `《${r}》`).join("、")}未能通过诗词库原文核验，多半记错或不存在。这次务必改选一首更广为流传、原文确凿的名篇。`
+      : "";
     const upstream = await undiciFetch(
       "https://openrouter.ai/api/v1/chat/completions",
       {
@@ -106,7 +98,22 @@ export default async function handler(req, res) {
           "Content-Type": "application/json",
           "X-Title": "Bard",
         },
-        body: payload,
+        body: JSON.stringify({
+          model: "google/gemini-3.5-flash",
+          max_tokens: 4000,
+          temperature: 1.0,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            {
+              role: "user",
+              content: [
+                { type: "image_url", image_url: { url: image } },
+                { type: "text", text: ask + hint },
+              ],
+            },
+          ],
+        }),
       },
     );
 
@@ -122,16 +129,60 @@ export default async function handler(req, res) {
     }
 
     const poem = extractPoem(text);
-    if (poem) return res.status(200).json(poem);
+    if (!poem) {
+      let finish = "?";
+      try {
+        finish = JSON.parse(text).choices?.[0]?.finish_reason ?? "?";
+      } catch {}
+      lastError = `bad upstream payload (finish=${finish})`;
+      console.error(`attempt ${attempt} bad payload finish=${finish}:`, text.slice(0, 600));
+      continue;
+    }
 
-    let finish = "?";
-    try {
-      finish = JSON.parse(text).choices?.[0]?.finish_reason ?? "?";
-    } catch {}
-    lastError = `bad upstream payload (finish=${finish})`;
-    console.error(`attempt ${attempt} bad payload finish=${finish}:`, text.slice(0, 600));
+    const verified = verifyPoem(poem);
+    if (!verified) {
+      rejected.push(`${poem.title}·${poem.author}`);
+      lastError = "这次选的诗未能核验原文，请再试一次";
+      continue;
+    }
+
+    await logEvent({
+      ok: true, dev, attempt, ms: Date.now() - t0,
+      match: verified.matchType, sim: verified.sim, keep: verified.keepModelText,
+      title: verified.poem.title, author: verified.poem.author,
+      rejected: rejected.length ? rejected : undefined,
+    });
+    return res.status(200).json(verified.poem);
   }
+
+  await logEvent({
+    ok: false, dev, ms: Date.now() - t0, err: lastError,
+    rejected: rejected.length ? rejected : undefined,
+  });
   return res.status(502).json({ error: lastError });
+}
+
+function deviceHash(device) {
+  return createHash("sha256").update(device).digest("hex").slice(0, 12);
+}
+
+/** 埋点：结构化日志一行 + （配了 Blob 时）落一个事件文件做长期留存。 */
+async function logEvent(e) {
+  const event = { evt: "poem", ts: new Date().toISOString(), ...e };
+  const line = JSON.stringify(event);
+  console.log(line);
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    try {
+      const { put } = await import("@vercel/blob");
+      await put(
+        `events/${event.ts.slice(0, 10)}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`,
+        line,
+        { access: "private", contentType: "application/json" },
+      );
+    } catch (err) {
+      console.error("blob log failed:", err?.message);
+    }
+  }
 }
 
 /** 从 chat/completions 响应里尽力挖出诗的 JSON；不合规返回 null（触发重试）。 */

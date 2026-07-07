@@ -14,3 +14,4 @@ server/.vercel/
 
 # 构建产物
 *.apk
+server/data/

@@ -17,6 +17,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## 后端 server/(Vercel 项目 bard-api)
 - `api/poem.js` 薄代理:校验 `X-Bard-Key` 应用口令,`X-Bard-Device`(ANDROID_ID)每日 40 次内存限额(尽力而为);OpenRouter key 在 Vercel env。
+- **严格核验(lib/corpus.js)**:模型选的诗必须在本地语料库(14万首,data/corpus.json,34MB,gitignored)核验;sim≥0.75 且逐句字数一致保留模型通行版文字,0.45–0.75 用库中原文替换,再低判编造带黑名单重试(共3次)。语料重建:`python3 tools/build_corpus.py <chinese-poetry仓库> data/corpus.json`(需 pip 装 opencc-python-reimplemented;坑:全唐诗《静夜思》是宋刊本"床前看月光",不能无脑用库文替换)。
+- **埋点**:每请求一行结构化 console.log(evt=poem,含 match/sim/attempt/rejected) + 落 Vercel Blob 私有存储 bard-events(`events/<日期>/*.json`);查看:`vercel blob list --rw-token <BLOB_READ_WRITE_TOKEN(.env.local里)>`。
 - 本地调试:`cd server && vercel dev --listen 3000`,`.env` 里可设 `OUTBOUND_PROXY=http://127.0.0.1:12334`(生产不设)。注意 vercel dev 每请求新起进程,内存限流本地测不出来。
 - 生产:https://bard-api.warmbeing.com/api/poem(warmbeing.com 在 Spaceship,CNAME → vercel;bard-api-seven.vercel.app 是备用,带 scope 的别名会被 Vercel SSO 拦)。
 - env:`BARD_APP_SECRET` / `OPENROUTER_API_KEY` / 可选 `OUTBOUND_PROXY`,无 .env.example。
