@@ -22,8 +22,9 @@ const SYSTEM_PROMPT = `
 - 若有多首同样契合，随意取其一即可，不必总选最负盛名的那首。
 - 只选你能一字不差背出原文的作品；记不准的宁可不选。
 
+给出三首互不相同的备选（题目不能相同），按契合度从高到低排列。
 只输出 JSON，不要任何其他文字，格式如下：
-{"title":"静夜思","dynasty":"唐","author":"李白","lines":["床前明月光","疑是地上霜","举头望明月","低头思故乡"],"excerpt":false,"reason":"…"}
+{"candidates":[{"title":"静夜思","dynasty":"唐","author":"李白","lines":["床前明月光","疑是地上霜","举头望明月","低头思故乡"],"excerpt":false,"reason":"…"},…]}
 `.trim();
 
 const DAILY_PER_DEVICE = 40;
@@ -32,7 +33,7 @@ const MAX_IMAGE_CHARS = 2_000_000; // base64 后约 1.5MB JPEG
 // OUTBOUND_PROXY 仅本地调试用（受限地区经宿主代理出去）；生产上不设，走 Vercel 原生 fetch。
 import { createHash } from "node:crypto";
 import { fetch as undiciFetch, ProxyAgent } from "undici";
-import { verifyPoem } from "../lib/corpus.js";
+import { baseTitle, verifyPoem } from "../lib/corpus.js";
 const dispatcher = process.env.OUTBOUND_PROXY
   ? new ProxyAgent(process.env.OUTBOUND_PROXY)
   : undefined;
@@ -79,15 +80,29 @@ export default async function handler(req, res) {
       ? `这些已经选过，请换别的：${excludeTitles.join("、")}。`
       : "");
 
-  // 严格模式：模型选的诗必须能在本地语料库核验，编造/记错就带着黑名单重试
+  // 严格模式：模型选的诗必须能在本地语料库核验，编造/记错就带着黑名单重试；
+  // 「换一首」的排除名单按题目主干硬校验（模型光靠提示词管不住，见 凉州词 案例）
   const t0 = Date.now();
   const dev = deviceHash(device);
+  const excludeSet = new Set(
+    excludeTitles.map((t) => baseTitle(t)).filter(Boolean),
+  );
   const rejected = [];
+  const duplicated = [];
   let lastError = "unknown";
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const hint = rejected.length
-      ? `注意：${rejected.map((r) => `《${r}》`).join("、")}未能通过诗词库原文核验，多半记错或不存在。请换一首你能一字不差背出原文的作品，仍以贴合照片意境为先。`
-      : "";
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const hints = [];
+    if (rejected.length) {
+      hints.push(
+        `${rejected.map((r) => `《${r}》`).join("、")}未能通过诗词库原文核验，多半记错或不存在，请换一首你能一字不差背出原文的作品。`,
+      );
+    }
+    if (duplicated.length) {
+      hints.push(
+        `${duplicated.map((r) => `《${r}》`).join("、")}与已选过的重复，必须换一首完全不同的作品。`,
+      );
+    }
+    const hint = hints.length ? `注意：${hints.join("")}仍以贴合照片意境为先。` : "";
     const upstream = await undiciFetch(
       "https://openrouter.ai/api/v1/chat/completions",
       {
@@ -128,8 +143,8 @@ export default async function handler(req, res) {
       continue;
     }
 
-    const poem = extractPoem(text);
-    if (!poem) {
+    const candidates = extractCandidates(text);
+    if (!candidates.length) {
       let finish = "?";
       try {
         finish = JSON.parse(text).choices?.[0]?.finish_reason ?? "?";
@@ -139,25 +154,38 @@ export default async function handler(req, res) {
       continue;
     }
 
-    const verified = verifyPoem(poem);
-    if (!verified) {
-      rejected.push(`${poem.title}·${poem.author}`);
-      lastError = "这次选的诗未能核验原文，请再试一次";
-      continue;
+    // 按契合度顺序取第一首「核验通过且不与已选重复」的
+    for (let ci = 0; ci < candidates.length; ci++) {
+      const poem = candidates[ci];
+      const verified = verifyPoem(poem);
+      if (!verified) {
+        rejected.push(`${poem.title}·${poem.author}`);
+        lastError = "这次选的诗未能核验原文，请再试一次";
+        continue;
+      }
+      if (
+        excludeSet.has(baseTitle(verified.poem.title)) ||
+        excludeSet.has(baseTitle(poem.title))
+      ) {
+        duplicated.push(verified.poem.title);
+        lastError = "换来换去还是这首，请再试一次";
+        continue;
+      }
+      await logEvent({
+        ok: true, dev, attempt, cand: ci, ms: Date.now() - t0,
+        match: verified.matchType, sim: verified.sim, keep: verified.keepModelText,
+        title: verified.poem.title, author: verified.poem.author,
+        rejected: rejected.length ? rejected : undefined,
+        duplicated: duplicated.length ? duplicated : undefined,
+      });
+      return res.status(200).json(verified.poem);
     }
-
-    await logEvent({
-      ok: true, dev, attempt, ms: Date.now() - t0,
-      match: verified.matchType, sim: verified.sim, keep: verified.keepModelText,
-      title: verified.poem.title, author: verified.poem.author,
-      rejected: rejected.length ? rejected : undefined,
-    });
-    return res.status(200).json(verified.poem);
   }
 
   await logEvent({
     ok: false, dev, ms: Date.now() - t0, err: lastError,
     rejected: rejected.length ? rejected : undefined,
+    duplicated: duplicated.length ? duplicated : undefined,
   });
   return res.status(502).json({ error: lastError });
 }
@@ -185,33 +213,34 @@ async function logEvent(e) {
   }
 }
 
-/** 从 chat/completions 响应里尽力挖出诗的 JSON；不合规返回 null（触发重试）。 */
-function extractPoem(text) {
+/** 从 chat/completions 响应里挖出候选诗列表；不合规的候选剔除。 */
+function extractCandidates(text) {
   let content;
   try {
     content = JSON.parse(text).choices?.[0]?.message?.content;
   } catch {
-    return null;
+    return [];
   }
   if (Array.isArray(content)) {
     content = content
       .map((p) => (typeof p === "string" ? p : p?.text || ""))
       .join("");
   }
-  if (typeof content !== "string" || !content.trim()) return null;
+  if (typeof content !== "string" || !content.trim()) return [];
 
   // 模型偶发在 JSON 前后拖围栏或烂尾（如 `...}\n"}\n境象。"}`），
   // 用括号配平截出第一个完整对象，而不是贪婪吃到最后一个 }
   const s = content.replace(/^\s*```(?:json)?\s*/i, "");
   const obj = firstJsonObject(s);
-  if (!obj) return null;
-  let poem;
+  if (!obj) return [];
+  let parsed;
   try {
-    poem = JSON.parse(obj);
+    parsed = JSON.parse(obj);
   } catch {
-    return null;
+    return [];
   }
-  return sanitizePoem(poem);
+  const list = Array.isArray(parsed?.candidates) ? parsed.candidates : [parsed];
+  return list.map(sanitizePoem).filter(Boolean);
 }
 
 function firstJsonObject(s) {

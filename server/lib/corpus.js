@@ -47,7 +47,7 @@ function norm(s) {
 }
 
 /** 题目主干：去掉词题/序号，如「水调歌头·明月几时有」→「水调歌头」，「山园小梅二首 其一」→「山园小梅」 */
-function baseTitle(t) {
+export function baseTitle(t) {
   let s = String(t || "").split(/[·・\s]/)[0].replace(PUNCT, "");
   for (let prev = ""; prev !== s; ) {
     prev = s;
