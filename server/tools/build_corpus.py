@@ -30,12 +30,50 @@ SONG_AUTHORS = set("""
 WS = re.compile(r"\s+")
 
 
-# opencc t2s 不处理的常见异体字/古字 → 通行字（按埋点观测持续补充）
-VARIANTS = str.maketrans({
-    "輭": "软", "氊": "毡", "毶": "毵", "皁": "皂", "囬": "回",
-    "羣": "群", "堦": "阶", "牀": "床", "脩": "修", "蹔": "暂",
-    "菴": "庵", "邨": "村", "隄": "堤", "畧": "略", "菓": "果",
-})
+# opencc t2s 不处理异体字/古字（輭/軟、氊/氈…）。从 Unihan 异体字关系自动
+# 生成归一化表，《通用规范汉字表》做安全闸：只把表外生僻字映射到表内通行字，
+# 通行字之间绝不互转（避免 呵→啊 之类误伤）。
+TOOLS_DATA = __file__.rsplit("/", 1)[0] + "/data"
+
+# 人工确认的映射，优先级最高（按埋点观测持续补充；
+# 古今义有分歧的如 拚/敧/秪 刻意不映射）
+MANUAL_VARIANTS = {
+    "輭": "软", "氊": "毡", "牀": "床", "邨": "村", "隄": "堤",
+    "馀": "余", "鬰": "郁", "嬾": "懒", "髪": "发", "浄": "净",
+    "鶑": "莺", "歛": "敛", "垅": "垄", "珮": "佩",
+}
+
+VARIANT_FIELDS = ("kSimplifiedVariant", "kZVariant", "kSemanticVariant")
+
+
+def build_variant_table():
+    std = set(open(f"{TOOLS_DATA}/gsc.txt").read()) - {"\n"}
+    pairs = {}
+    for line in open(f"{TOOLS_DATA}/Unihan_Variants.txt"):
+        if line.startswith("#") or "\t" not in line:
+            continue
+        cp, field, val = line.rstrip("\n").split("\t")[:3]
+        if field not in VARIANT_FIELDS:
+            continue
+        src = chr(int(cp[2:], 16))
+        tgts = [chr(int(v.split("<")[0][2:], 16)) for v in val.split()]
+        pairs.setdefault(src, {}).setdefault(field, []).extend(tgts)
+
+    mapping = {}
+    for src, fields in pairs.items():
+        if src in std or t2s(src) in std:
+            continue  # 本身（或繁转简后）就是通行字，不动
+        for field in VARIANT_FIELDS:  # 简化字关系 > 同字异形 > 同义异体
+            tgt = next((t2s(t) for t in fields.get(field, []) if t2s(t) in std), None)
+            if tgt and tgt != src:
+                mapping[src] = tgt
+                break
+    mapping.update(MANUAL_VARIANTS)
+    print(f"variant table: {len(mapping)} chars")
+    return str.maketrans(mapping)
+
+
+VARIANTS = build_variant_table()
 
 PUNCT_END = tuple("，。！？；、：")
 
@@ -63,6 +101,7 @@ def main(root, out_path):
         text = clean_text(paragraphs)
         if convert:
             title, author, text = t2s(title), t2s(author), t2s(text)
+        title = title.translate(VARIANTS)
         text = text.translate(VARIANTS)
         if len(text) < 8 or len(text) > 2000:
             return
