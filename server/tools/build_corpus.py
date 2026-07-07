@@ -30,6 +30,13 @@ SONG_AUTHORS = set("""
 WS = re.compile(r"\s+")
 
 
+# opencc t2s 不处理的常见异体字/古字 → 通行字（按埋点观测持续补充）
+VARIANTS = str.maketrans({
+    "輭": "软", "氊": "毡", "毶": "毵", "皁": "皂", "囬": "回",
+    "羣": "群", "堦": "阶", "牀": "床", "脩": "修", "蹔": "暂",
+    "菴": "庵", "邨": "村", "隄": "堤", "畧": "略", "菓": "果",
+})
+
 PUNCT_END = tuple("，。！？；、：")
 
 
@@ -56,6 +63,7 @@ def main(root, out_path):
         text = clean_text(paragraphs)
         if convert:
             title, author, text = t2s(title), t2s(author), t2s(text)
+        text = text.translate(VARIANTS)
         if len(text) < 8 or len(text) > 2000:
             return
         key = (title, author, text[:24])

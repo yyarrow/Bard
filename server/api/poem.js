@@ -14,13 +14,13 @@ const SYSTEM_PROMPT = `
 
 要求：
 - 必须是真实存在的原文，一字不差，绝不自己创作、拼接或改写。
-- 优先选意境贴切的；但宁可选名篇，也不要选你记不准原文的生僻之作。
+- 一切以意境贴合照片为先；名篇与生僻之作一视同仁，只要你记得准原文。
 - 若全诗较长（长调词、古风），取其中最契合的连续二至四句，excerpt 设为 true。
 - lines：把选出的内容按标点切成短句，每个短句一个元素，不含任何标点，
   保持原文顺序，总数控制在 2 到 8 个。
 - reason：一句话（三十字以内）说明为何契合此景，语气清雅，不要用「这张照片」开头。
 - 若有多首同样契合，随意取其一即可，不必总选最负盛名的那首。
-- 只选你能一字不差背出原文的、广为流传的作品；记不准的宁可不选。
+- 只选你能一字不差背出原文的作品；记不准的宁可不选。
 
 只输出 JSON，不要任何其他文字，格式如下：
 {"title":"静夜思","dynasty":"唐","author":"李白","lines":["床前明月光","疑是地上霜","举头望明月","低头思故乡"],"excerpt":false,"reason":"…"}
@@ -86,7 +86,7 @@ export default async function handler(req, res) {
   let lastError = "unknown";
   for (let attempt = 1; attempt <= 3; attempt++) {
     const hint = rejected.length
-      ? `注意：${rejected.map((r) => `《${r}》`).join("、")}未能通过诗词库原文核验，多半记错或不存在。这次务必改选一首更广为流传、原文确凿的名篇。`
+      ? `注意：${rejected.map((r) => `《${r}》`).join("、")}未能通过诗词库原文核验，多半记错或不存在。请换一首你能一字不差背出原文的作品，仍以贴合照片意境为先。`
       : "";
     const upstream = await undiciFetch(
       "https://openrouter.ai/api/v1/chat/completions",
