@@ -96,32 +96,43 @@ export function verifyPoem(poem) {
   const windowSize = Math.min(Math.max(poem.lines.length, 2), 8);
   const authorNorm = norm(poem.author);
 
-  // 候选：题目全称/主干命中；都落空再按首句全库扫描
+  const evaluate = (indices) => {
+    let best = null;
+    for (const i of indices) {
+      const [title, author, dynasty, text] = poems[i];
+      const clauses = text.split(CLAUSE_SEP).filter((c) => c.length > 0).map((c) => norm(c));
+      const w = bestWindow(clauses, modelJoined, windowSize);
+      // 同名不同篇很多（如 747 首水调歌头）：作者对得上加一点权重
+      const score = w.sim + (authorNorm && norm(author).includes(authorNorm) ? 0.08 : 0);
+      if (!best || score > best.score) {
+        best = { i, w, score, sim: w.sim, title, author, dynasty, clauses };
+      }
+    }
+    return best;
+  };
+
+  // 先按题目找；分数不够再按首句全库扫描兜底。注意撞名不能挡住扫描：
+  // 模型报《凉州词》但实为别家同题诗时，只有扫句才找得到正主
   const keys = [...new Set([norm(poem.title), baseTitle(poem.title)])];
-  let candidateIdx = keys.flatMap((k) => byTitle.get(k) || []);
+  const titleIdx = keys.flatMap((k) => byTitle.get(k) || []);
   let matchType = "title";
-  if (candidateIdx.length === 0) {
-    matchType = "line-scan";
+  let best = evaluate(titleIdx);
+
+  if (!best || best.sim < 0.45) {
     const d = load();
     if (!d.normTexts) d.normTexts = d.poems.map((p) => norm(p[3]));
     const probe = poem.lines[0];
+    const scanIdx = [];
     if (probe && probe.length >= 4) {
-      for (let i = 0; i < d.normTexts.length && candidateIdx.length < 50; i++) {
-        if (d.normTexts[i].includes(probe)) candidateIdx.push(i);
+      const seen = new Set(titleIdx);
+      for (let i = 0; i < d.normTexts.length && scanIdx.length < 50; i++) {
+        if (!seen.has(i) && d.normTexts[i].includes(probe)) scanIdx.push(i);
       }
     }
-  }
-  if (candidateIdx.length === 0) return null;
-
-  let best = null;
-  for (const i of candidateIdx) {
-    const [title, author, dynasty, text] = poems[i];
-    const clauses = text.split(CLAUSE_SEP).filter((c) => c.length > 0).map((c) => norm(c));
-    const w = bestWindow(clauses, modelJoined, windowSize);
-    // 同名不同篇很多（如 747 首水调歌头）：作者对得上加一点权重
-    const score = w.sim + (authorNorm && norm(author).includes(authorNorm) ? 0.08 : 0);
-    if (!best || score > best.score) {
-      best = { i, w, score, sim: w.sim, title, author, dynasty, clauses };
+    const scanBest = evaluate(scanIdx);
+    if (scanBest && (!best || scanBest.score > best.score)) {
+      best = scanBest;
+      matchType = "line-scan";
     }
   }
 
@@ -137,7 +148,10 @@ export function verifyPoem(poem) {
   const lines = keepModelText ? poem.lines : best.w.lines;
   return {
     poem: {
-      title: keepModelText ? poem.title : best.title.replace(/\s+/g, " ").trim(),
+      // line-scan 命中意味着模型报的题目本身对不上，此时一律用库中正题
+      title: keepModelText && matchType === "title"
+        ? poem.title
+        : best.title.replace(/\s+/g, " ").trim(),
       dynasty: best.dynasty,
       author: best.author,
       lines,

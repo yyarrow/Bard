@@ -142,6 +142,10 @@ def main(root, out_path):
         for p in json.load(open(f)):
             add(p.get("title", ""), p.get("author", "纳兰性德"), "清", p.get("para", []))
 
+    # 人工补充：chinese-poetry 缺收但已核实出处的作品（按埋点误杀记录持续增补）
+    for title, author, dynasty, text in json.load(open(f"{TOOLS_DATA}/../supplement.json")):
+        add(title, author, dynasty, [text])
+
     with open(out_path, "w") as fh:
         json.dump(poems, fh, ensure_ascii=False, separators=(",", ":"))
     print(f"{len(poems)} poems -> {out_path}")
