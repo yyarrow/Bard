@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.BookmarkAdd
+import androidx.compose.material.icons.outlined.BookmarkAdded
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.Refresh
@@ -59,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.res.ResourcesCompat
 import app.bard.R
+import app.bard.journal.Journal
 import app.bard.poem.Poem
 import app.bard.render.PoemPainter
 import app.bard.ui.theme.Cinnabar
@@ -67,6 +70,7 @@ import app.bard.ui.theme.Kai
 import app.bard.ui.theme.Paper
 import app.bard.ui.theme.PaperDim
 import app.bard.ui.theme.Sand
+import app.bard.util.Almanac
 import app.bard.util.saveToGallery
 import app.bard.util.shareImage
 import kotlinx.coroutines.Dispatchers
@@ -136,8 +140,14 @@ fun ResultScreen(
         PoemPainter.renderOverlay(layout, typeface, darkInk = bright)
     }
 
-    fun bakeNow(): Bitmap =
-        PoemPainter.bake(photo, overlay, layout, anchor.x, anchor.y, userScale)
+    fun bakeNow(): Bitmap {
+        val now = System.currentTimeMillis()
+        val caption = "${Almanac.formalDate(now)} · ${Almanac.solarTerm(now)}"
+        return PoemPainter.bake(
+            photo, overlay, layout, anchor.x, anchor.y, userScale,
+            caption = caption, captionTypeface = typeface,
+        )
+    }
 
     Box(Modifier.fillMaxSize().background(Ink)) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
@@ -291,10 +301,31 @@ fun ResultScreen(
                 }
             }
 
+            // 入册状态跟随当前这首诗（换一首后可再入）
+            var journaledId by remember(poem) { mutableStateOf<String?>(null) }
+
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 12.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
+                ActionItem(
+                    if (journaledId == null) Icons.Outlined.BookmarkAdd
+                    else Icons.Outlined.BookmarkAdded,
+                    if (journaledId == null) "入册" else "已入册",
+                ) {
+                    if (journaledId == null) {
+                        scope.launch {
+                            val entry = withContext(Dispatchers.Default) {
+                                Journal.add(
+                                    context, photo, bakeNow(), poem,
+                                    anchor.x, anchor.y, userScale, horizontal,
+                                )
+                            }
+                            journaledId = entry.id
+                            snackbar.showSnackbar("已入册 · 手账第 ${Journal.list(context).size} 页")
+                        }
+                    }
+                }
                 ActionItem(Icons.Outlined.PhotoCamera, "重拍", onRetake)
                 ActionItem(Icons.Outlined.Refresh, "换一首", onAnother)
                 ActionItem(Icons.Outlined.Download, "保存") {

@@ -33,10 +33,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Cameraswitch
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Key
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -66,6 +69,9 @@ import androidx.core.content.ContextCompat
 import app.bard.ui.theme.Kai
 import app.bard.ui.theme.Paper
 import app.bard.ui.theme.Sand
+import app.bard.journal.Journal
+import app.bard.poem.DailyPoem
+import app.bard.util.Almanac
 import app.bard.util.decodeUri
 import app.bard.util.downscale
 import app.bard.util.rotate
@@ -77,6 +83,7 @@ import kotlin.coroutines.resumeWithException
 fun CameraScreen(
     onCaptured: (Bitmap) -> Unit,
     onOpenKeySettings: () -> Unit,
+    onOpenJournal: () -> Unit,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -193,12 +200,76 @@ fun CameraScreen(
                 fontFamily = Kai, fontSize = 12.sp, color = Sand,
                 modifier = Modifier.padding(top = 2.dp),
             )
+            val today = remember { System.currentTimeMillis() }
+            Text(
+                remember(today) {
+                    java.text.SimpleDateFormat("M月d日", java.util.Locale.CHINA)
+                        .format(java.util.Date(today)) +
+                        " · ${Almanac.solarTerm(today)} · 农历${Almanac.lunarDate(today)}"
+                },
+                fontFamily = Kai, fontSize = 11.sp, color = Sand,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+
+            // 今日一诗（离线精选库）+ 连续记录
+            val daily = remember { DailyPoem.today(context) }
+            val streak = remember { Journal.streakDays(context) }
+            var showDaily by remember { mutableStateOf(false) }
+            if (daily != null) {
+                Surface(
+                    onClick = { showDaily = true },
+                    shape = RoundedCornerShape(50),
+                    color = Color.Black.copy(alpha = 0.35f),
+                    modifier = Modifier.padding(top = 10.dp),
+                ) {
+                    Text(
+                        "今日一诗 · ${daily.title}" +
+                            if (streak > 1) "　已连记 $streak 天" else "",
+                        fontFamily = Kai, fontSize = 12.sp, color = Paper,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                    )
+                }
+            }
+            if (showDaily && daily != null) {
+                AlertDialog(
+                    onDismissRequest = { showDaily = false },
+                    title = {
+                        Text("${daily.title}", fontFamily = Kai)
+                    },
+                    text = {
+                        Column {
+                            Text(
+                                listOf(daily.dynasty, daily.author)
+                                    .filter { it.isNotBlank() }.joinToString(" · "),
+                                fontFamily = Kai, fontSize = 13.sp, color = Sand,
+                            )
+                            Text(
+                                daily.lines.joinToString("\n"),
+                                fontFamily = Kai, fontSize = 17.sp,
+                                lineHeight = 30.sp,
+                                modifier = Modifier.padding(top = 12.dp),
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { showDaily = false }) {
+                            Text("拍一张应景的", fontFamily = Kai)
+                        }
+                    },
+                )
+            }
         }
         IconButton(
             onClick = onOpenKeySettings,
             modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(6.dp),
         ) {
             Icon(Icons.Outlined.Key, contentDescription = "设置 API Key", tint = Sand)
+        }
+        IconButton(
+            onClick = onOpenJournal,
+            modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(6.dp),
+        ) {
+            Icon(Icons.AutoMirrored.Outlined.MenuBook, contentDescription = "手账", tint = Paper)
         }
 
         // 底部操作条

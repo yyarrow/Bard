@@ -32,6 +32,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.provider.Settings
+import app.bard.journal.Journal
 import app.bard.poem.ApiKeyStore
 import app.bard.poem.Poem
 import app.bard.poem.PoemFinder
@@ -52,6 +53,9 @@ private sealed interface Stage {
     data class Loading(val photo: Bitmap) : Stage
     data class Result(val photo: Bitmap, val poem: Poem) : Stage
     data class Failed(val photo: Bitmap, val message: String, val needKey: Boolean) : Stage
+    data object Book : Stage
+    data class Page(val entry: Journal.Entry) : Stage
+    data object Gallery : Stage
 }
 
 private val MOCK_POEM = Poem(
@@ -105,7 +109,15 @@ fun BardApp(mockPoem: Boolean = false) {
     }
 
     if (stage != Stage.Camera) {
-        BackHandler { backToCamera() }
+        BackHandler {
+            stage = when (stage) {
+                is Stage.Page, Stage.Gallery -> Stage.Book
+                else -> {
+                    job?.cancel()
+                    Stage.Camera
+                }
+            }
+        }
     }
 
     Crossfade(targetState = stage, label = "stage") { s ->
@@ -116,6 +128,7 @@ fun BardApp(mockPoem: Boolean = false) {
                     seek(photo, emptyList())
                 },
                 onOpenKeySettings = { showKeyDialog = true },
+                onOpenJournal = { stage = Stage.Book },
             )
 
             is Stage.Loading -> LoadingScreen(photo = s.photo, onCancel = ::backToCamera)
@@ -126,6 +139,20 @@ fun BardApp(mockPoem: Boolean = false) {
                 onRetake = ::backToCamera,
                 onAnother = { seek(s.photo, usedTitles.toList()) },
                 onRotate = { stage = Stage.Result(s.photo.rotate(90), s.poem) },
+            )
+
+            is Stage.Book -> JournalScreen(
+                onOpenPage = { stage = Stage.Page(it) },
+                onOpenGallery = { stage = Stage.Gallery },
+                onBack = ::backToCamera,
+            )
+
+            is Stage.Gallery -> GalleryScreen(onBack = { stage = Stage.Book })
+
+            is Stage.Page -> PageViewerScreen(
+                entry = s.entry,
+                onDeleted = { stage = Stage.Book },
+                onBack = { stage = Stage.Book },
             )
 
             is Stage.Failed -> FailedScreen(

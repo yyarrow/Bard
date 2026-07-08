@@ -165,15 +165,38 @@ object PoemPainter {
         return bmp
     }
 
-    /** 按当前位置与缩放把覆盖层合成到照片上（导出用）。 */
+    /** 按当前位置与缩放把覆盖层合成到照片上（导出用）；caption 为左下角日签题款。 */
     fun bake(
         photo: Bitmap, overlay: Bitmap, layout: Layout,
         fx: Float, fy: Float, scale: Float,
+        caption: String? = null, captionTypeface: Typeface? = null,
     ): Bitmap {
         val out = photo.copy(Bitmap.Config.ARGB_8888, true)
         val (x, y) = overlayPos(photo.width, photo.height, layout, fx, fy, scale)
         val dst = RectF(x, y, x + layout.width * scale, y + layout.height * scale)
-        Canvas(out).drawBitmap(overlay, null, dst, Paint(Paint.FILTER_BITMAP_FLAG))
+        val canvas = Canvas(out)
+        canvas.drawBitmap(overlay, null, dst, Paint(Paint.FILTER_BITMAP_FLAG))
+
+        if (!caption.isNullOrBlank()) {
+            val size = photo.height * 0.021f
+            val pad = size * 1.2f
+            val bright = regionIsBright(
+                photo,
+                Rect(
+                    pad.toInt(), (photo.height - pad - size * 1.4f).toInt(),
+                    (pad + size * caption.length).toInt(), photo.height - (pad * 0.4f).toInt(),
+                ),
+            )
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                typeface = captionTypeface
+                textSize = size
+                color = if (bright) INK_DARK else INK_LIGHT
+                alpha = 225
+                setShadowLayer(size * 0.12f, 0f, size * 0.04f,
+                    if (bright) 0x40FFF3DC else 0x59000000)
+            }
+            canvas.drawText(caption, pad, photo.height - pad, paint)
+        }
         return out
     }
 }
