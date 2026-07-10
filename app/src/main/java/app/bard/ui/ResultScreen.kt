@@ -5,8 +5,11 @@ import android.graphics.Rect
 import android.graphics.Typeface
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -90,6 +93,8 @@ fun ResultScreen(
     onRetake: () -> Unit,
     onAnother: () -> Unit,
     onRotate: () -> Unit,
+    moods: List<String> = emptyList(),
+    onMood: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -224,6 +229,36 @@ fun ResultScreen(
                                 },
                                 fontFamily = Kai, fontSize = 13.sp,
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 心境印章：备胎里有不同心境时才出现，点一下秒切（不发请求）
+            val moodChoices = remember(moods, poem) {
+                (listOf(poem.mood).filter { it.isNotBlank() } + moods).distinct()
+            }
+            if (moodChoices.isNotEmpty()) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 18.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    moodChoices.forEach { m ->
+                        val current = m == poem.mood
+                        Surface(
+                            onClick = { if (!current) onMood(m) },
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = if (current) BorderStroke(1.dp, Cinnabar) else null,
+                        ) {
+                            Text(
+                                m, fontFamily = Kai, fontSize = 12.sp,
+                                color = if (current) Cinnabar else PaperDim,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                             )
                         }
                     }

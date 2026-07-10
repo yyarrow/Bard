@@ -56,12 +56,14 @@ object PoemFinder {
         .readTimeout(120, TimeUnit.SECONDS)
         .build()
 
+    /** 返回按契合度排序的候选（首位主选，其余备胎）。want>=4 走批量心境补货。 */
     suspend fun find(
         photo: Bitmap,
         personalKey: String?,
         deviceId: String,
         excludeTitles: List<String>,
-    ): Poem = withContext(Dispatchers.IO) {
+        want: Int = 1,
+    ): List<Poem> = withContext(Dispatchers.IO) {
         val jpeg = photo.downscale(1024).toJpegBytes(quality = 80)
         val dataUrl = "data:image/jpeg;base64," +
                 Base64.encodeToString(jpeg, Base64.NO_WRAP)
@@ -69,7 +71,7 @@ object PoemFinder {
         val direct = !personalKey.isNullOrBlank()
         val request =
             if (direct) directRequest(dataUrl, personalKey!!, excludeTitles)
-            else proxyRequest(dataUrl, deviceId, excludeTitles)
+            else proxyRequest(dataUrl, deviceId, excludeTitles, want)
 
         val (code, text) = await(http.newCall(request))
         android.util.Log.d("Bard", "poem HTTP $code: ${text.take(400)}")
@@ -77,26 +79,28 @@ object PoemFinder {
             throw ApiException(code, errorDetail(text))
         }
 
-        val poemJson = if (direct) {
-            JSONObject(text)
+        if (direct) {
+            val content = JSONObject(text)
                 .getJSONArray("choices")
                 .getJSONObject(0)
                 .getJSONObject("message")
                 .getString("content")
+            listOf(Poem.fromJson(content))
         } else {
-            text
+            Poem.listFromJson(text)
         }
-        Poem.fromJson(poemJson)
     }
 
     private fun proxyRequest(
         dataUrl: String,
         deviceId: String,
         excludeTitles: List<String>,
+        want: Int,
     ): Request {
         val body = JSONObject().apply {
             put("image", dataUrl)
             put("exclude", JSONArray(excludeTitles))
+            if (want > 1) put("want", want)
         }
         return Request.Builder()
             .url(BuildConfig.BARD_API_BASE + "/api/poem")

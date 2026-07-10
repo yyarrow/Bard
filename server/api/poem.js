@@ -23,13 +23,15 @@ const SYSTEM_PROMPT = `
 - 若有多首同样契合，随意取其一即可，不必总选最负盛名的那首。
 - 只选你能一字不差背出原文的作品；记不准的宁可不选。
 
-给出三首互不相同的备选（题目不能相同），按契合度从高到低排列。
+给出三首互不相同的备选（题目不能相同），按契合度从高到低排列；
+若用户消息另行指定了备选数量或心境要求，以用户消息为准。
 只输出 JSON，不要任何其他文字，格式如下：
 {"candidates":[{"title":"静夜思","dynasty":"唐","author":"李白","lines":["床前明月光","疑是地上霜","举头望明月","低头思故乡"],"excerpt":false,"reason":"…"},…]}
 `.trim();
 
 const DAILY_PER_DEVICE = 40;
 const MAX_IMAGE_CHARS = 2_000_000; // base64 后约 1.5MB JPEG
+const MOODS = ["豪放", "婉约", "闲适", "禅意", "思乡", "怅惘", "欢喜"];
 
 // OUTBOUND_PROXY 仅本地调试用（受限地区经宿主代理出去）；生产上不设，走 Vercel 原生 fetch。
 import { createHash } from "node:crypto";
@@ -63,7 +65,7 @@ export default async function handler(req, res) {
     return res.status(429).json({ error: "daily quota exceeded" });
   }
 
-  const { image, exclude } = req.body || {};
+  const { image, exclude, want } = req.body || {};
   if (
     typeof image !== "string" ||
     !image.startsWith("data:image/jpeg;base64,") ||
@@ -74,9 +76,15 @@ export default async function handler(req, res) {
   const excludeTitles = Array.isArray(exclude)
     ? exclude.filter((t) => typeof t === "string").map((t) => t.slice(0, 40)).slice(0, 20)
     : [];
+  // want=1: 常规选诗（模型仍出 3 候选，验过的都随 alternates 带回）
+  // want>=4: 批量补货，心境各异并带 mood 标签（客户端缓存给换一首/心情切换用）
+  const wanted = Math.min(Math.max(Number.isInteger(want) ? want : 1, 1), 10);
+  const batch = wanted >= 4;
 
-  const ask =
-    "为这张照片选一首契合此情此景的诗词。" +
+  const ask = (batch
+    ? `为这张照片挑选 ${wanted} 首各自契合、但心境彼此不同的诗词候选（题目不能相同），` +
+      `每首在 JSON 里额外加 "mood" 字段，取值只能是：${MOODS.join("、")}。`
+    : "为这张照片选一首契合此情此景的诗词。") +
     (excludeTitles.length
       ? `这些已经选过，请换别的：${excludeTitles.join("、")}。`
       : "");
@@ -155,7 +163,9 @@ export default async function handler(req, res) {
       continue;
     }
 
-    // 按契合度顺序取第一首「核验通过且不与已选重复」的
+    // 逐个核验+排重，通过的全部收下（首位是主选，其余作为备胎随响应带回）
+    const passed = [];
+    const passedTitles = new Set();
     for (let ci = 0; ci < candidates.length; ci++) {
       const poem = candidates[ci];
       const verified = verifyPoem(poem);
@@ -164,22 +174,34 @@ export default async function handler(req, res) {
         lastError = "这次选的诗未能核验原文，请再试一次";
         continue;
       }
+      const tKey = baseTitle(verified.poem.title);
       if (
-        excludeSet.has(baseTitle(verified.poem.title)) ||
-        excludeSet.has(baseTitle(poem.title))
+        excludeSet.has(tKey) || excludeSet.has(baseTitle(poem.title)) ||
+        passedTitles.has(tKey)
       ) {
         duplicated.push(verified.poem.title);
         lastError = "换来换去还是这首，请再试一次";
         continue;
       }
+      passedTitles.add(tKey);
+      passed.push({ ...verified.poem, mood: poem.mood || "", _cand: ci, _v: verified });
+    }
+
+    if (passed.length > 0) {
+      const first = passed[0];
       await logEvent({
-        ok: true, dev, attempt, cand: ci, ms: Date.now() - t0,
-        match: verified.matchType, sim: verified.sim, keep: verified.keepModelText,
-        title: verified.poem.title, author: verified.poem.author,
+        ok: true, dev, attempt, cand: first._cand, ms: Date.now() - t0,
+        want: wanted, got: passed.length,
+        match: first._v.matchType, sim: first._v.sim, keep: first._v.keepModelText,
+        title: first.title, author: first.author,
         rejected: rejected.length ? rejected : undefined,
         duplicated: duplicated.length ? duplicated : undefined,
       });
-      return res.status(200).json(verified.poem);
+      const strip = ({ _cand, _v, ...p }) => p;
+      return res.status(200).json({
+        ...strip(first),
+        alternates: passed.slice(1).map(strip),
+      });
     }
   }
 
@@ -289,5 +311,6 @@ function sanitizePoem(poem) {
     lines,
     excerpt: poem.excerpt === true,
     reason: typeof poem.reason === "string" ? poem.reason.slice(0, 80) : "",
+    mood: MOODS.includes(poem.mood) ? poem.mood : "",
   };
 }
