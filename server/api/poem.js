@@ -100,8 +100,13 @@ export default async function handler(req, res) {
   );
   const rejected = [];
   const duplicated = [];
+  // 跨轮累积已核验候选：批量模式一轮没凑满时，第二轮补足而不是拿零头交差
+  const passed = [];
+  const passedTitles = new Set();
+  let attemptsUsed = 0;
   let lastError = "unknown";
   for (let attempt = 1; attempt <= 2; attempt++) {
+    attemptsUsed = attempt;
     const hints = [];
     if (rejected.length) {
       hints.push(
@@ -166,8 +171,6 @@ export default async function handler(req, res) {
     }
 
     // 逐个核验+排重，通过的全部收下（首位是主选，其余作为备胎随响应带回）
-    const passed = [];
-    const passedTitles = new Set();
     for (let ci = 0; ci < candidates.length; ci++) {
       const poem = candidates[ci];
       const verified = verifyPoem(poem);
@@ -189,22 +192,25 @@ export default async function handler(req, res) {
       passed.push({ ...verified.poem, mood: poem.mood || "", _cand: ci, _v: verified });
     }
 
-    if (passed.length > 0) {
-      const first = passed[0];
-      await logEvent({
-        ok: true, dev, attempt, cand: first._cand, ms: Date.now() - t0,
-        want: wanted, got: passed.length,
-        match: first._v.matchType, sim: first._v.sim, keep: first._v.keepModelText,
-        title: first.title, author: first.author,
-        rejected: rejected.length ? rejected : undefined,
-        duplicated: duplicated.length ? duplicated : undefined,
-      });
-      const strip = ({ _cand, _v, ...p }) => p;
-      return res.status(200).json({
-        ...strip(first),
-        alternates: passed.slice(1).map(strip),
-      });
-    }
+    // 批量模式凑满 wanted 才提前收工，没凑满就再打一轮；常规模式有一首即可
+    if (passed.length >= (batch ? wanted : 1)) break;
+  }
+
+  if (passed.length > 0) {
+    const first = passed[0];
+    await logEvent({
+      ok: true, dev, attempts: attemptsUsed, cand: first._cand, ms: Date.now() - t0,
+      want: wanted, got: passed.length,
+      match: first._v.matchType, sim: first._v.sim, keep: first._v.keepModelText,
+      title: first.title, author: first.author,
+      rejected: rejected.length ? rejected : undefined,
+      duplicated: duplicated.length ? duplicated : undefined,
+    });
+    const strip = ({ _cand, _v, ...p }) => p;
+    return res.status(200).json({
+      ...strip(first),
+      alternates: passed.slice(1).map(strip),
+    });
   }
 
   await logEvent({
