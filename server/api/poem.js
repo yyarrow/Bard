@@ -105,7 +105,12 @@ export default async function handler(req, res) {
   const passedTitles = new Set();
   let attemptsUsed = 0;
   let lastError = "unknown";
+  // 函数上限 60s（vercel.json）：每轮上游请求限时 25s；重试只在时间预算还够时发起，
+  // 否则宁可交出已凑到的部分结果，也不能整个调用被平台掐掉、颗粒无收
+  const ATTEMPT_TIMEOUT_MS = 25_000;
+  const RETRY_BUDGET_MS = 30_000;
   for (let attempt = 1; attempt <= 2; attempt++) {
+    if (attempt > 1 && Date.now() - t0 > RETRY_BUDGET_MS) break;
     attemptsUsed = attempt;
     const hints = [];
     if (rejected.length) {
@@ -119,36 +124,43 @@ export default async function handler(req, res) {
       );
     }
     const hint = hints.length ? `注意：${hints.join("")}仍以贴合照片意境为先。` : "";
-    const upstream = await undiciFetch(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
-        dispatcher,
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json",
-          "X-Title": "Bard",
+    let upstream;
+    let text;
+    try {
+      upstream = await undiciFetch(
+        "https://openrouter.ai/api/v1/chat/completions",
+        {
+          dispatcher,
+          signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            "Content-Type": "application/json",
+            "X-Title": "Bard",
+          },
+          body: JSON.stringify({
+            model: "google/gemini-3.5-flash",
+            max_tokens: 4000,
+            temperature: 1.0,
+            response_format: { type: "json_object" },
+            messages: [
+              { role: "system", content: SYSTEM_PROMPT },
+              {
+                role: "user",
+                content: [
+                  { type: "image_url", image_url: { url: image } },
+                  { type: "text", text: ask + hint },
+                ],
+              },
+            ],
+          }),
         },
-        body: JSON.stringify({
-          model: "google/gemini-3.5-flash",
-          max_tokens: 4000,
-          temperature: 1.0,
-          response_format: { type: "json_object" },
-          messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            {
-              role: "user",
-              content: [
-                { type: "image_url", image_url: { url: image } },
-                { type: "text", text: ask + hint },
-              ],
-            },
-          ],
-        }),
-      },
-    );
-
-    const text = await upstream.text();
+      );
+      text = await upstream.text();
+    } catch (err) {
+      lastError = `upstream fetch failed: ${err?.name === "TimeoutError" ? "timeout" : err?.message}`;
+      continue;
+    }
     if (!upstream.ok) {
       let msg = text.slice(0, 200);
       try {

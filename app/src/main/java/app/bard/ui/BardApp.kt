@@ -165,6 +165,9 @@ fun BardApp(mockPoem: Boolean = false) {
 
     fun backToCamera() {
         job?.cancel()
+        // 放弃这张照片就没必要继续补货了——批量请求带着整张图，白烧流量和配额
+        batchJob?.cancel()
+        batchRequested = false
         stage = Stage.Camera
     }
 
@@ -174,6 +177,8 @@ fun BardApp(mockPoem: Boolean = false) {
                 is Stage.Page, Stage.Gallery -> Stage.Book
                 else -> {
                     job?.cancel()
+                    batchJob?.cancel()
+                    batchRequested = false
                     Stage.Camera
                 }
             }
