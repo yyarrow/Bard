@@ -85,7 +85,8 @@ export default async function handler(req, res) {
 
   const ask = (batch
     ? `为这张照片挑选 ${wanted} 首各自契合、心境尽量彼此不同的诗词候选（题目不能相同），` +
-      `每首在 JSON 里额外加 "mood" 字段，取值只能是：${MOODS.join("、")}。`
+      `每首在 JSON 里额外加必填的 "mood" 字段，取值只能是：${MOODS.join("、")}。` +
+      `候选示例：{"title":"山居秋暝","dynasty":"唐","author":"王维","lines":["空山新雨后","天气晚来秋"],"excerpt":true,"mood":"闲适","reason":"…"}。`
     : "为这张照片选一首契合此情此景的诗词。") +
     (excludeTitles.length
       ? `这些已经选过，请换别的：${excludeTitles.join("、")}。`
@@ -210,9 +211,12 @@ export default async function handler(req, res) {
 
   if (passed.length > 0) {
     const first = passed[0];
+    // 空 mood 不判废（心境章隐藏但换一首照常可用），打点观测模型遵循率
+    const moodless = batch ? passed.filter((p) => !p.mood).length : undefined;
     await logEvent({
       ok: true, dev, attempt: attemptsUsed, cand: first._cand, ms: Date.now() - t0,
       want: wanted, got: passed.length,
+      moodless: moodless || undefined,
       match: first._v.matchType, sim: first._v.sim, keep: first._v.keepModelText,
       title: first.title, author: first.author,
       rejected: rejected.length ? rejected : undefined,

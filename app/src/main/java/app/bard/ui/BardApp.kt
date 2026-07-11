@@ -139,8 +139,10 @@ fun BardApp(mockPoem: Boolean = false) {
         }
     }
 
-    /** 换一首：有没看过的备胎就零等待直出、顺手后台补货；池子空了就把批量请求
-     *  本身当前台请求（一次调用既出主选又填池），绝不并发两个全图请求。
+    /** 换一首：有没看过的备胎就零等待直出、顺手后台补货；池子空了先做前台幂等
+     *  校验——补货还在途就转前台等它（join 复用，不重发），确实没有在途的才
+     *  发起前台批量（一次调用既出主选又填池）。幂等池是内存态，进程重启后
+     *  丢了也无妨：偶发并行只是多花一单的小成本。
      *  池里可能有切心境退回来的已看诗，换一首必须跳过它们。 */
     fun another(s: Stage.Result) {
         val idx = spares.indexOfFirst { it.title !in usedTitles }
@@ -149,8 +151,27 @@ fun BardApp(mockPoem: Boolean = false) {
             usedTitles += next.title
             stage = Stage.Result(s.photo, next)
             prefetchBatch(s.photo)
+            return
+        }
+        batchRequested = true // 前台这一发就是补货，后台不必再来
+        val pending = batchJob
+        if (pending?.isActive == true) {
+            job?.cancel()
+            job = scope.launch {
+                stage = Stage.Loading(s.photo)
+                pending.join()
+                val i = spares.indexOfFirst { it.title !in usedTitles }
+                if (i >= 0) {
+                    val next = spares.removeAt(i)
+                    usedTitles += next.title
+                    stage = Stage.Result(s.photo, next)
+                } else {
+                    // 在途补货失败或全被排重，退回正常前台批量
+                    // （seek 里的 job?.cancel() 取消的是本协程，launch 已完成赋值，安全）
+                    seek(s.photo, usedTitles.toList(), want = 8)
+                }
+            }
         } else {
-            batchRequested = true // 这次前台批量就是补货，后台不必再来一发
             seek(s.photo, usedTitles.toList(), want = 8)
         }
     }
