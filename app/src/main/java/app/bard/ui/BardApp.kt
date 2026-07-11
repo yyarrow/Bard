@@ -138,24 +138,27 @@ fun BardApp(mockPoem: Boolean = false) {
         }
     }
 
-    /** 换一首：优先吃备胎（零等待），空了才走整屏加载的网络请求。 */
+    /** 换一首：优先吃没看过的备胎（零等待），没有才走整屏加载的网络请求。
+     *  池里可能有切心境退回来的已看诗，换一首必须跳过它们。 */
     fun another(s: Stage.Result) {
         prefetchBatch(s.photo)
-        val next = spares.removeFirstOrNull()
-        if (next != null) {
-            if (next.title !in usedTitles) usedTitles += next.title
+        val idx = spares.indexOfFirst { it.title !in usedTitles }
+        if (idx >= 0) {
+            val next = spares.removeAt(idx)
+            usedTitles += next.title
             stage = Stage.Result(s.photo, next)
         } else {
             seek(s.photo, usedTitles.toList())
         }
     }
 
-    /** 切心境：取该心境的备胎，当前这首回池（可再切回来）。 */
+    /** 切心境：取该心境的备胎；当前这首带心境才回池（心境章是它唯一的找回入口，
+     *  无心境的回池只会变成死条目）。 */
     fun pickMood(s: Stage.Result, mood: String) {
         val idx = spares.indexOfFirst { it.mood == mood }
         if (idx < 0) return
         val chosen = spares.removeAt(idx)
-        spares.add(s.poem)
+        if (s.poem.mood.isNotBlank()) spares.add(s.poem)
         if (chosen.title !in usedTitles) usedTitles += chosen.title
         stage = Stage.Result(s.photo, chosen)
     }
