@@ -211,7 +211,7 @@ export default async function handler(req, res) {
   if (passed.length > 0) {
     const first = passed[0];
     await logEvent({
-      ok: true, dev, attempts: attemptsUsed, cand: first._cand, ms: Date.now() - t0,
+      ok: true, dev, attempt: attemptsUsed, cand: first._cand, ms: Date.now() - t0,
       want: wanted, got: passed.length,
       match: first._v.matchType, sim: first._v.sim, keep: first._v.keepModelText,
       title: first.title, author: first.author,

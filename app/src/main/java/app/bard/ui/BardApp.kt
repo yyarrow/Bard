@@ -91,7 +91,7 @@ fun BardApp(mockPoem: Boolean = false) {
         poems.forEach { if (known.add(it.title)) spares.add(it) }
     }
 
-    fun seek(photo: Bitmap, exclude: List<String>) {
+    fun seek(photo: Bitmap, exclude: List<String>, want: Int = 1) {
         job?.cancel()
         job = scope.launch {
             stage = Stage.Loading(photo)
@@ -102,6 +102,7 @@ fun BardApp(mockPoem: Boolean = false) {
                 } else {
                     PoemFinder.find(
                         photo, ApiKeyStore.overrideValue(context), deviceId(), exclude,
+                        want = want,
                     )
                 }
             }
@@ -138,17 +139,19 @@ fun BardApp(mockPoem: Boolean = false) {
         }
     }
 
-    /** 换一首：优先吃没看过的备胎（零等待），没有才走整屏加载的网络请求。
+    /** 换一首：有没看过的备胎就零等待直出、顺手后台补货；池子空了就把批量请求
+     *  本身当前台请求（一次调用既出主选又填池），绝不并发两个全图请求。
      *  池里可能有切心境退回来的已看诗，换一首必须跳过它们。 */
     fun another(s: Stage.Result) {
-        prefetchBatch(s.photo)
         val idx = spares.indexOfFirst { it.title !in usedTitles }
         if (idx >= 0) {
             val next = spares.removeAt(idx)
             usedTitles += next.title
             stage = Stage.Result(s.photo, next)
+            prefetchBatch(s.photo)
         } else {
-            seek(s.photo, usedTitles.toList())
+            batchRequested = true // 这次前台批量就是补货，后台不必再来一发
+            seek(s.photo, usedTitles.toList(), want = 8)
         }
     }
 
