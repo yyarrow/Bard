@@ -26,8 +26,8 @@ android {
         applicationId = "app.bard"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.2.0"
+        versionCode = 4
+        versionName = "0.2.1"
         buildConfigField("String", "BARD_API_BASE", "\"$bardApiBase\"")
         buildConfigField("String", "BARD_APP_SECRET", "\"$bardAppSecret\"")
     }

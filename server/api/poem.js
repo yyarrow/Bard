@@ -23,13 +23,15 @@ const SYSTEM_PROMPT = `
 - 若有多首同样契合，随意取其一即可，不必总选最负盛名的那首。
 - 只选你能一字不差背出原文的作品；记不准的宁可不选。
 
-给出三首互不相同的备选（题目不能相同），按契合度从高到低排列。
+给出三首互不相同的备选（题目不能相同），按契合度从高到低排列；
+若用户消息另行指定了备选数量或心境要求，以用户消息为准。
 只输出 JSON，不要任何其他文字，格式如下：
 {"candidates":[{"title":"静夜思","dynasty":"唐","author":"李白","lines":["床前明月光","疑是地上霜","举头望明月","低头思故乡"],"excerpt":false,"reason":"…"},…]}
 `.trim();
 
 const DAILY_PER_DEVICE = 40;
 const MAX_IMAGE_CHARS = 2_000_000; // base64 后约 1.5MB JPEG
+const MOODS = ["豪放", "婉约", "闲适", "禅意", "思乡", "怅惘", "欢喜"];
 
 // OUTBOUND_PROXY 仅本地调试用（受限地区经宿主代理出去）；生产上不设，走 Vercel 原生 fetch。
 import { createHash } from "node:crypto";
@@ -63,7 +65,7 @@ export default async function handler(req, res) {
     return res.status(429).json({ error: "daily quota exceeded" });
   }
 
-  const { image, exclude } = req.body || {};
+  const { image, exclude, want } = req.body || {};
   if (
     typeof image !== "string" ||
     !image.startsWith("data:image/jpeg;base64,") ||
@@ -74,9 +76,18 @@ export default async function handler(req, res) {
   const excludeTitles = Array.isArray(exclude)
     ? exclude.filter((t) => typeof t === "string").map((t) => t.slice(0, 40)).slice(0, 20)
     : [];
+  // want=1: 常规选诗（模型仍出 3 候选，验过的都随 alternates 带回）
+  // want>=4: 批量补货，心境各异并带 mood 标签（客户端缓存给换一首/心情切换用）
+  let wanted = Math.min(Math.max(Number.isInteger(want) ? want : 1, 1), 10);
+  const batch = wanted >= 4;
+  // 心境要求彼此不同，数量不能超过心境种数，否则约束不可满足
+  if (batch) wanted = Math.min(wanted, MOODS.length);
 
-  const ask =
-    "为这张照片选一首契合此情此景的诗词。" +
+  const ask = (batch
+    ? `为这张照片挑选 ${wanted} 首各自契合、心境尽量彼此不同的诗词候选（题目不能相同），` +
+      `每首在 JSON 里额外加必填的 "mood" 字段，取值只能是：${MOODS.join("、")}。` +
+      `候选示例：{"title":"山居秋暝","dynasty":"唐","author":"王维","lines":["空山新雨后","天气晚来秋"],"excerpt":true,"mood":"闲适","reason":"…"}。`
+    : "为这张照片选一首契合此情此景的诗词。") +
     (excludeTitles.length
       ? `这些已经选过，请换别的：${excludeTitles.join("、")}。`
       : "");
@@ -90,8 +101,18 @@ export default async function handler(req, res) {
   );
   const rejected = [];
   const duplicated = [];
+  // 跨轮累积已核验候选：批量模式一轮没凑满时，第二轮补足而不是拿零头交差
+  const passed = [];
+  const passedTitles = new Set();
+  let attemptsUsed = 0;
   let lastError = "unknown";
+  // 函数上限 60s（vercel.json）：每轮上游请求限时 25s；重试只在时间预算还够时发起，
+  // 否则宁可交出已凑到的部分结果，也不能整个调用被平台掐掉、颗粒无收
+  const ATTEMPT_TIMEOUT_MS = 25_000;
+  const RETRY_BUDGET_MS = 30_000;
   for (let attempt = 1; attempt <= 2; attempt++) {
+    if (attempt > 1 && Date.now() - t0 > RETRY_BUDGET_MS) break;
+    attemptsUsed = attempt;
     const hints = [];
     if (rejected.length) {
       hints.push(
@@ -104,36 +125,43 @@ export default async function handler(req, res) {
       );
     }
     const hint = hints.length ? `注意：${hints.join("")}仍以贴合照片意境为先。` : "";
-    const upstream = await undiciFetch(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
-        dispatcher,
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json",
-          "X-Title": "Bard",
+    let upstream;
+    let text;
+    try {
+      upstream = await undiciFetch(
+        "https://openrouter.ai/api/v1/chat/completions",
+        {
+          dispatcher,
+          signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            "Content-Type": "application/json",
+            "X-Title": "Bard",
+          },
+          body: JSON.stringify({
+            model: "google/gemini-3.5-flash",
+            max_tokens: 4000,
+            temperature: 1.0,
+            response_format: { type: "json_object" },
+            messages: [
+              { role: "system", content: SYSTEM_PROMPT },
+              {
+                role: "user",
+                content: [
+                  { type: "image_url", image_url: { url: image } },
+                  { type: "text", text: ask + hint },
+                ],
+              },
+            ],
+          }),
         },
-        body: JSON.stringify({
-          model: "google/gemini-3.5-flash",
-          max_tokens: 4000,
-          temperature: 1.0,
-          response_format: { type: "json_object" },
-          messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            {
-              role: "user",
-              content: [
-                { type: "image_url", image_url: { url: image } },
-                { type: "text", text: ask + hint },
-              ],
-            },
-          ],
-        }),
-      },
-    );
-
-    const text = await upstream.text();
+      );
+      text = await upstream.text();
+    } catch (err) {
+      lastError = `upstream fetch failed: ${err?.name === "TimeoutError" ? "timeout" : err?.message}`;
+      continue;
+    }
     if (!upstream.ok) {
       let msg = text.slice(0, 200);
       try {
@@ -155,7 +183,7 @@ export default async function handler(req, res) {
       continue;
     }
 
-    // 按契合度顺序取第一首「核验通过且不与已选重复」的
+    // 逐个核验+排重，通过的全部收下（首位是主选，其余作为备胎随响应带回）
     for (let ci = 0; ci < candidates.length; ci++) {
       const poem = candidates[ci];
       const verified = verifyPoem(poem);
@@ -164,23 +192,41 @@ export default async function handler(req, res) {
         lastError = "这次选的诗未能核验原文，请再试一次";
         continue;
       }
+      const tKey = baseTitle(verified.poem.title);
       if (
-        excludeSet.has(baseTitle(verified.poem.title)) ||
-        excludeSet.has(baseTitle(poem.title))
+        excludeSet.has(tKey) || excludeSet.has(baseTitle(poem.title)) ||
+        passedTitles.has(tKey)
       ) {
         duplicated.push(verified.poem.title);
         lastError = "换来换去还是这首，请再试一次";
         continue;
       }
-      await logEvent({
-        ok: true, dev, attempt, cand: ci, ms: Date.now() - t0,
-        match: verified.matchType, sim: verified.sim, keep: verified.keepModelText,
-        title: verified.poem.title, author: verified.poem.author,
-        rejected: rejected.length ? rejected : undefined,
-        duplicated: duplicated.length ? duplicated : undefined,
-      });
-      return res.status(200).json(verified.poem);
+      passedTitles.add(tKey);
+      passed.push({ ...verified.poem, mood: poem.mood || "", _cand: ci, _v: verified });
     }
+
+    // 批量模式凑满 wanted 才提前收工，没凑满就再打一轮；常规模式有一首即可
+    if (passed.length >= (batch ? wanted : 1)) break;
+  }
+
+  if (passed.length > 0) {
+    const first = passed[0];
+    // 空 mood 不判废（心境章隐藏但换一首照常可用），打点观测模型遵循率
+    const moodless = batch ? passed.filter((p) => !p.mood).length : undefined;
+    await logEvent({
+      ok: true, dev, attempt: attemptsUsed, cand: first._cand, ms: Date.now() - t0,
+      want: wanted, got: passed.length,
+      moodless: moodless || undefined,
+      match: first._v.matchType, sim: first._v.sim, keep: first._v.keepModelText,
+      title: first.title, author: first.author,
+      rejected: rejected.length ? rejected : undefined,
+      duplicated: duplicated.length ? duplicated : undefined,
+    });
+    const strip = ({ _cand, _v, ...p }) => p;
+    return res.status(200).json({
+      ...strip(first),
+      alternates: passed.slice(1).map(strip),
+    });
   }
 
   await logEvent({
@@ -289,5 +335,6 @@ function sanitizePoem(poem) {
     lines,
     excerpt: poem.excerpt === true,
     reason: typeof poem.reason === "string" ? poem.reason.slice(0, 80) : "",
+    mood: MOODS.includes(poem.mood) ? poem.mood : "",
   };
 }

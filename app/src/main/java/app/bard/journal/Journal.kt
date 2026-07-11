@@ -137,6 +137,7 @@ object Journal {
             put("lines", JSONArray(e.poem.lines))
             put("reason", e.poem.reason)
             put("excerpt", e.poem.excerpt)
+            put("mood", e.poem.mood)
         })
     }
 
@@ -153,6 +154,7 @@ object Journal {
                 lines = (0 until linesArr.length()).map { linesArr.getString(it) },
                 reason = p.optString("reason"),
                 excerpt = p.optBoolean("excerpt", false),
+                mood = p.optString("mood"),
             ),
             anchorX = o.getDouble("anchorX").toFloat(),
             anchorY = o.getDouble("anchorY").toFloat(),

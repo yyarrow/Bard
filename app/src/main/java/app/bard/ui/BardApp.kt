@@ -20,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -75,26 +76,43 @@ fun BardApp(mockPoem: Boolean = false) {
     var stage by remember { mutableStateOf<Stage>(Stage.Camera) }
     var showKeyDialog by rememberSaveable { mutableStateOf(false) }
     val usedTitles = remember { mutableListOf<String>() }
+    // 备胎候选：主请求验剩的 + 批量补货的，换一首/切心境直接消费，不等网络
+    val spares = remember { mutableStateListOf<Poem>() }
+    var batchRequested by remember { mutableStateOf(false) }
     var job by remember { mutableStateOf<Job?>(null) }
+    var batchJob by remember { mutableStateOf<Job?>(null) }
 
-    fun seek(photo: Bitmap, exclude: List<String>) {
+    fun deviceId(): String = Settings.Secure.getString(
+        context.contentResolver, Settings.Secure.ANDROID_ID,
+    ) ?: "anon"
+
+    fun rememberSpares(poems: List<Poem>) {
+        val known = (usedTitles + spares.map { it.title }).toMutableSet()
+        poems.forEach { if (known.add(it.title)) spares.add(it) }
+    }
+
+    fun seek(photo: Bitmap, exclude: List<String>, want: Int = 1) {
         job?.cancel()
         job = scope.launch {
             stage = Stage.Loading(photo)
             runCatching {
                 if (mockPoem) {
                     kotlinx.coroutines.delay(1200)
-                    MOCK_POEM
+                    listOf(MOCK_POEM)
                 } else {
-                    val deviceId = Settings.Secure.getString(
-                        context.contentResolver, Settings.Secure.ANDROID_ID,
-                    ) ?: "anon"
-                    PoemFinder.find(photo, ApiKeyStore.overrideValue(context), deviceId, exclude)
+                    PoemFinder.find(
+                        photo, ApiKeyStore.overrideValue(context), deviceId(), exclude,
+                        want = want,
+                    )
                 }
             }
-                .onSuccess { poem ->
-                    usedTitles += poem.title
-                    stage = Stage.Result(photo, poem)
+                .onSuccess { poems ->
+                    val first = poems.first()
+                    usedTitles += first.title
+                    // 并发的批量补货可能抢先把同一首入了池，展示前剔除，防止下次换一首复读
+                    spares.removeAll { it.title == first.title }
+                    rememberSpares(poems.drop(1))
+                    stage = Stage.Result(photo, first)
                 }
                 .onFailure { e ->
                     if (e is kotlinx.coroutines.CancellationException) return@onFailure
@@ -103,8 +121,77 @@ fun BardApp(mockPoem: Boolean = false) {
         }
     }
 
+    /** 第一次按「换一首」触发的后台批量补货（8 首、心境各异），静默失败。 */
+    fun prefetchBatch(photo: Bitmap) {
+        // 直连模式（个人 key）是单诗接口，没有批量/心境语义，预取只会白烧用户的钱
+        if (batchRequested || mockPoem || ApiKeyStore.overrideValue(context) != null) return
+        batchRequested = true
+        batchJob = scope.launch {
+            runCatching {
+                PoemFinder.find(
+                    photo, ApiKeyStore.overrideValue(context), deviceId(),
+                    excludeTitles = (usedTitles + spares.map { it.title }).distinct(),
+                    want = 8,
+                )
+            }
+                .onSuccess { rememberSpares(it) }
+                .onFailure { android.util.Log.w("Bard", "batch prefetch failed", it) }
+        }
+    }
+
+    /** 换一首：有没看过的备胎就零等待直出、顺手后台补货；池子空了先做前台幂等
+     *  校验——补货还在途就转前台等它（join 复用，不重发），确实没有在途的才
+     *  发起前台批量（一次调用既出主选又填池）。幂等池是内存态，进程重启后
+     *  丢了也无妨：偶发并行只是多花一单的小成本。
+     *  池里可能有切心境退回来的已看诗，换一首必须跳过它们。 */
+    fun another(s: Stage.Result) {
+        val idx = spares.indexOfFirst { it.title !in usedTitles }
+        if (idx >= 0) {
+            val next = spares.removeAt(idx)
+            usedTitles += next.title
+            stage = Stage.Result(s.photo, next)
+            prefetchBatch(s.photo)
+            return
+        }
+        batchRequested = true // 前台这一发就是补货，后台不必再来
+        val pending = batchJob
+        if (pending?.isActive == true) {
+            job?.cancel()
+            job = scope.launch {
+                stage = Stage.Loading(s.photo)
+                pending.join()
+                val i = spares.indexOfFirst { it.title !in usedTitles }
+                if (i >= 0) {
+                    val next = spares.removeAt(i)
+                    usedTitles += next.title
+                    stage = Stage.Result(s.photo, next)
+                } else {
+                    // 在途补货失败或全被排重，退回正常前台批量
+                    // （seek 里的 job?.cancel() 取消的是本协程，launch 已完成赋值，安全）
+                    seek(s.photo, usedTitles.toList(), want = 8)
+                }
+            }
+        } else {
+            seek(s.photo, usedTitles.toList(), want = 8)
+        }
+    }
+
+    /** 切心境：取该心境的备胎；当前这首带心境才回池（心境章是它唯一的找回入口，
+     *  无心境的回池只会变成死条目）。 */
+    fun pickMood(s: Stage.Result, mood: String) {
+        val idx = spares.indexOfFirst { it.mood == mood }
+        if (idx < 0) return
+        val chosen = spares.removeAt(idx)
+        if (s.poem.mood.isNotBlank()) spares.add(s.poem)
+        if (chosen.title !in usedTitles) usedTitles += chosen.title
+        stage = Stage.Result(s.photo, chosen)
+    }
+
     fun backToCamera() {
         job?.cancel()
+        // 放弃这张照片就没必要继续补货了——批量请求带着整张图，白烧流量和配额
+        batchJob?.cancel()
+        batchRequested = false
         stage = Stage.Camera
     }
 
@@ -114,6 +201,8 @@ fun BardApp(mockPoem: Boolean = false) {
                 is Stage.Page, Stage.Gallery -> Stage.Book
                 else -> {
                     job?.cancel()
+                    batchJob?.cancel()
+                    batchRequested = false
                     Stage.Camera
                 }
             }
@@ -125,6 +214,9 @@ fun BardApp(mockPoem: Boolean = false) {
             is Stage.Camera -> CameraScreen(
                 onCaptured = { photo ->
                     usedTitles.clear()
+                    spares.clear()
+                    batchRequested = false
+                    batchJob?.cancel()
                     seek(photo, emptyList())
                 },
                 onOpenKeySettings = { showKeyDialog = true },
@@ -137,8 +229,10 @@ fun BardApp(mockPoem: Boolean = false) {
                 photo = s.photo,
                 poem = s.poem,
                 onRetake = ::backToCamera,
-                onAnother = { seek(s.photo, usedTitles.toList()) },
+                onAnother = { another(s) },
                 onRotate = { stage = Stage.Result(s.photo.rotate(90), s.poem) },
+                moods = spares.mapNotNull { it.mood.ifBlank { null } }.distinct(),
+                onMood = { pickMood(s, it) },
             )
 
             is Stage.Book -> JournalScreen(
