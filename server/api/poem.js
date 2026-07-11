@@ -78,11 +78,13 @@ export default async function handler(req, res) {
     : [];
   // want=1: 常规选诗（模型仍出 3 候选，验过的都随 alternates 带回）
   // want>=4: 批量补货，心境各异并带 mood 标签（客户端缓存给换一首/心情切换用）
-  const wanted = Math.min(Math.max(Number.isInteger(want) ? want : 1, 1), 10);
+  let wanted = Math.min(Math.max(Number.isInteger(want) ? want : 1, 1), 10);
   const batch = wanted >= 4;
+  // 心境要求彼此不同，数量不能超过心境种数，否则约束不可满足
+  if (batch) wanted = Math.min(wanted, MOODS.length);
 
   const ask = (batch
-    ? `为这张照片挑选 ${wanted} 首各自契合、但心境彼此不同的诗词候选（题目不能相同），` +
+    ? `为这张照片挑选 ${wanted} 首各自契合、心境尽量彼此不同的诗词候选（题目不能相同），` +
       `每首在 JSON 里额外加 "mood" 字段，取值只能是：${MOODS.join("、")}。`
     : "为这张照片选一首契合此情此景的诗词。") +
     (excludeTitles.length

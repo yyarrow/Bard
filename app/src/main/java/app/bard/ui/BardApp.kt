@@ -108,6 +108,8 @@ fun BardApp(mockPoem: Boolean = false) {
                 .onSuccess { poems ->
                     val first = poems.first()
                     usedTitles += first.title
+                    // 并发的批量补货可能抢先把同一首入了池，展示前剔除，防止下次换一首复读
+                    spares.removeAll { it.title == first.title }
                     rememberSpares(poems.drop(1))
                     stage = Stage.Result(photo, first)
                 }
@@ -120,7 +122,8 @@ fun BardApp(mockPoem: Boolean = false) {
 
     /** 第一次按「换一首」触发的后台批量补货（8 首、心境各异），静默失败。 */
     fun prefetchBatch(photo: Bitmap) {
-        if (batchRequested || mockPoem) return
+        // 直连模式（个人 key）是单诗接口，没有批量/心境语义，预取只会白烧用户的钱
+        if (batchRequested || mockPoem || ApiKeyStore.overrideValue(context) != null) return
         batchRequested = true
         batchJob = scope.launch {
             runCatching {
