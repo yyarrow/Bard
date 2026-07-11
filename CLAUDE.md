@@ -7,7 +7,7 @@
 ./gradlew :app:assembleDebug          # 或 assembleRelease / installDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
-- 已发布 APK:`shishi-0.2.0.apk`(release,debug keystore 签名)。
+- 已发布 APK:`shishi-0.2.1.apk`(release,debug keystore 签名)。
 - 配置注入:`local.properties` 的 `BARD_API_BASE`(默认 https://bard-api.warmbeing.com)和 `BARD_APP_SECRET` → BuildConfig;用户在设置里填个人 OpenRouter key 则绕过代理直连(ApiKeyStore)。
 
 ## 调试技巧
