@@ -123,6 +123,8 @@ object PoemFinder {
         }
         val body = JSONObject().apply {
             put("model", MODEL)
+            // 3.8-flash 强制思考且关不掉，压最低档控延迟（同服务端）
+            put("reasoning", JSONObject().put("effort", "low"))
             put("max_tokens", 2000)
             put("response_format", JSONObject().put("type", "json_object"))
             put("messages", JSONArray().apply {
