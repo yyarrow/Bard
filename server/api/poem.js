@@ -106,10 +106,10 @@ export default async function handler(req, res) {
   const passedTitles = new Set();
   let attemptsUsed = 0;
   let lastError = "unknown";
-  // 函数上限 60s（vercel.json）：每轮上游请求限时 25s；重试只在时间预算还够时发起，
+  // 函数上限 60s（vercel.json）：每轮上游请求限时 35s（3.8-flash 延迟波动大）；
   // 否则宁可交出已凑到的部分结果，也不能整个调用被平台掐掉、颗粒无收
-  const ATTEMPT_TIMEOUT_MS = 25_000;
-  const RETRY_BUDGET_MS = 30_000;
+  const ATTEMPT_TIMEOUT_MS = 35_000;
+  const RETRY_BUDGET_MS = 20_000;
   for (let attempt = 1; attempt <= 2; attempt++) {
     if (attempt > 1 && Date.now() - t0 > RETRY_BUDGET_MS) break;
     attemptsUsed = attempt;
@@ -140,7 +140,8 @@ export default async function handler(req, res) {
             "X-Title": "Bard",
           },
           body: JSON.stringify({
-            model: "google/gemini-3.5-flash",
+            model: "google/gemini-3.8-flash",
+            reasoning: { effort: "low" }, // 3.8 强制思考且关不掉，压到最低档控延迟
             max_tokens: 4000,
             temperature: 1.0,
             response_format: { type: "json_object" },

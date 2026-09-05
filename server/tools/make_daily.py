@@ -48,7 +48,7 @@ def main():
     all_candidates = []
     for months in ("1、2、3、4", "5、6、7、8", "9、10、11、12"):
         body = json.dumps({
-            "model": "google/gemini-3.5-flash",
+            "model": "google/gemini-3.8-flash",
             "max_tokens": 16000,
             "temperature": 0.7,
             "response_format": {"type": "json_object"},
