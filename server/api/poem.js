@@ -141,6 +141,7 @@ export default async function handler(req, res) {
           },
           body: JSON.stringify({
             model: "google/gemini-3.8-flash",
+            reasoning: { effort: "low" }, // 3.8 强制思考且关不掉，压到最低档控延迟
             max_tokens: 4000,
             temperature: 1.0,
             response_format: { type: "json_object" },
