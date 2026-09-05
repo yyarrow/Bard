@@ -140,7 +140,7 @@ export default async function handler(req, res) {
             "X-Title": "Bard",
           },
           body: JSON.stringify({
-            model: "google/gemini-3.5-flash",
+            model: "google/gemini-3.8-flash",
             max_tokens: 4000,
             temperature: 1.0,
             response_format: { type: "json_object" },

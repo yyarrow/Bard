@@ -30,7 +30,7 @@ class ApiException(val code: Int, message: String) : Exception(message)
  */
 object PoemFinder {
 
-    private const val MODEL = "google/gemini-3.5-flash"
+    private const val MODEL = "google/gemini-3.8-flash"
     private const val OPENROUTER = "https://openrouter.ai/api/v1/chat/completions"
     private val JSON = "application/json".toMediaType()
 

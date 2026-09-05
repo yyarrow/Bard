@@ -1,6 +1,6 @@
 # Bard（拾诗）— 拍照配诗手账安卓 app
 
-拍照 → LLM 选一首契合的诗 → 楷体题在照片上（带日期节气题款）→ 入册成手账。0.2.0 起定位「诗意手账」：本地手账时间轴（journal/Journal.kt,文件存储 filesDir/journal/）、今日一诗（assets/daily.json,113 首离线精选,server/tools/make_daily.py+verify_daily.mjs 生成）、streak、图鉴（诗人/朝代/节气）、农历节气（util/Almanac.kt,寿星公式）。Kotlin + Compose 单模块,LLM 走 OpenRouter + gemini-3.5-flash(用户指定,不用 Claude)。无测试设施。
+拍照 → LLM 选一首契合的诗 → 楷体题在照片上（带日期节气题款）→ 入册成手账。0.2.0 起定位「诗意手账」：本地手账时间轴（journal/Journal.kt,文件存储 filesDir/journal/）、今日一诗（assets/daily.json,113 首离线精选,server/tools/make_daily.py+verify_daily.mjs 生成）、streak、图鉴（诗人/朝代/节气）、农历节气（util/Almanac.kt,寿星公式）。Kotlin + Compose 单模块,LLM 走 OpenRouter + gemini-3.8-flash(用户指定,不用 Claude)。无测试设施。
 
 ## 构建 & 安装
 ```bash
