@@ -145,7 +145,13 @@ export function verifyPoem(poem) {
     best.sim >= 0.75 &&
     poem.lines.length === best.w.lines.length &&
     poem.lines.every((l, i) => l.length === best.w.lines[i].length);
-  const lines = keepModelText ? poem.lines : best.w.lines;
+  let lines = keepModelText ? poem.lines : best.w.lines;
+
+  // 上屏硬顶四句：模型没按要求截取（如律诗整首照录）时，取库文里与模型
+  // 所选内容最贴的连续四句兜底，避免整首糊满照片
+  if (lines.length > 4) {
+    lines = bestWindow(best.clauses, lines.join(""), 4).lines;
+  }
   return {
     poem: {
       // line-scan 命中意味着模型报的题目本身对不上，此时一律用库中正题
